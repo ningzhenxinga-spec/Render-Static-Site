@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>薪资与工时管家 版本：v1.0 Stable (工资双轨+周次对齐版)</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #4f46e5; --primary-hover: #4338ca;
+            --success: #10b981; --danger: #ef4444; --warning: #f59e0b;
+            --bg: #f8fafc; --card-bg: #ffffff;
+            --text-main: #1e293b; --text-muted: #64748b;
+            --border: #e2e8f0; --radius: 12px;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, sans-serif; }
+        body { background-color: var(--bg); color: var(--text-main); line-height: 1.5; padding-bottom: 70px; }
+        
+        .header-section { background: var(--primary); color: white; text-align: center; padding: 20px 15px; border-bottom-left-radius: 20px; border-bottom-right-radius: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .clock-time { font-size: 2.8rem; font-weight: 700; font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+        .clock-date { font-size: 0.95rem; opacity: 0.9; }
+        
+        .quick-actions { display: flex; gap: 10px; margin-top: 15px; }
+        .btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; color: white; display: inline-flex; align-items: center; justify-content: center; }
+        .btn-punch-in { background: #10b981; } .btn-punch-out { background: #f59e0b; }
+        .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-main); }
+        
+        .app-container { padding: 15px; max-width: 600px; margin: 0 auto; }
+        .card { background: var(--card-bg); border-radius: var(--radius); padding: 15px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
+        .card-header { font-size: 1.05rem; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--bg); padding-bottom: 8px; }
+
+        .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .stat-box { background: var(--bg); padding: 12px; border-radius: 10px; text-align: center; }
+        .stat-label { font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 4px; }
+        .stat-value { font-size: 1.3rem; font-weight: 700; color: var(--primary); }
+        .stat-value.compact { font-size: 1.05rem; } /* 缩小双轨工资的字号以适应排版 */
+
+        .chart-container { position: relative; height: 220px; width: 100%; margin-top: 10px; }
+        .doughnut-container { position: relative; height: 160px; width: 100%; margin: 10px auto; }
+        
+        .week-nav { display: flex; justify-content: space-between; align-items: center; background: var(--bg); padding: 8px; border-radius: 8px; margin-bottom: 10px; font-size: 0.85rem;}
+        .week-nav button { background: none; border: none; color: var(--primary); font-weight: bold; padding: 4px 8px; }
+
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem; white-space: nowrap; }
+        th { color: var(--text-muted); padding: 8px; border-bottom: 1px solid var(--border); }
+        td { padding: 12px 8px; border-bottom: 1px solid var(--border); }
+        
+        .input-group { margin-bottom: 12px; }
+        .input-group label { display: block; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 4px; }
+        .input-control { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 1rem; outline: none; }
+        textarea.input-control { min-height: 100px; resize: vertical; }
+        
+        .manual-entry-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .manual-entry-form .full-width { grid-column: span 2; }
+        
+        .ratio-inputs { display: flex; gap: 10px; margin-bottom: 10px; }
+
+        /* 底部导航 */
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; display: flex; border-top: 1px solid var(--border); box-shadow: 0 -2px 10px rgba(0,0,0,0.05); z-index: 1000; padding-bottom: env(safe-area-inset-bottom); }
+        .nav-item { flex: 1; text-align: center; padding: 12px 0; font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
+        .nav-item.active { color: var(--primary); border-top: 2px solid var(--primary); background: #f8fafc; }
+        
+        /* 页面切换逻辑 */
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: fadeIn 0.3s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+        .badge-note { background: #fef3c7; color: #d97706; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; margin-top: 4px; display: inline-block; white-space: normal; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+    </style>
+</head>
+<body>
+
+<!-- 顶部打卡区 -->
+<div class="header-section">
+    <div class="clock-time" id="clock">00:00:00</div>
+    <div class="clock-date" id="date">--</div>
+    <div class="quick-actions">
+        <button class="btn btn-punch-in" onclick="punchIn()">🚀 上班打卡</button>
+        <button class="btn btn-punch-out" onclick="punchOut()">🎉 下班打卡</button>
+    </div>
+</div>
+
+<div class="app-container">
+    
+    <!-- === TAB 1: 本周看板 === -->
+    <div id="tab-weekly" class="tab-content active">
+        <!-- 数据网格优化：预计/实际双轨展示 -->
+        <div class="card stat-grid">
+            <div class="stat-box">
+                <span class="stat-label">本周 预计/实际 工资</span>
+                <span class="stat-value compact" id="weekSalaryOverview">¥0 / ¥0</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-label">本周实际工时</span>
+                <span class="stat-value" id="weekActualHours" style="color:var(--text-main)">0.0h</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-label">本月累计已赚</span>
+                <span class="stat-value" id="monthSalary" style="color:var(--success)">¥0.00</span>
+            </div>
+            <div class="stat-box">
+                <span class="stat-label">本月累计工时</span>
+                <span class="stat-value" id="monthHours">0.0h</span>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="week-nav">
+                <button onclick="changeWeek(-1)">◀ 上周</button>
+                <span id="currentWeekLabel">本周加载中...</span>
+                <button onclick="changeWeek(1)">下周 ▶</button>
+            </div>
+            <div class="chart-container"><canvas id="weeklyChart"></canvas></div>
+            
+            <hr style="border: 0; border-top: 1px dashed var(--border); margin: 15px 0;">
+            
+            <div class="card-header">
+                <span>⚖️ 岗位工时配比 (跑菜 vs 看区)</span>
+                <button class="btn-outline" style="padding: 4px 8px; font-size: 0.75rem; border-radius: 4px;" onclick="saveRatio()">保存比例</button>
+            </div>
+            <div class="ratio-inputs">
+                <div style="flex:1"><label style="font-size:0.75rem;color:var(--text-muted)">跑菜 (小时)</label><input type="number" id="ratioRun" class="input-control" step="0.5" placeholder="例如: 15"></div>
+                <div style="flex:1"><label style="font-size:0.75rem;color:var(--text-muted)">看区 (小时)</label><input type="number" id="ratioWatch" class="input-control" step="0.5" placeholder="例如: 20"></div>
+            </div>
+            <div class="doughnut-container"><canvas id="ratioChart"></canvas></div>
+
+            <hr style="border: 0; border-top: 1px dashed var(--border); margin: 15px 0;">
+
+            <div class="table-container">
+                <table id="weeklyTable">
+                    <thead><tr><th>日期</th><th>排班</th><th>计划/实际</th><th>操作/心得</th></tr></thead>
+                    <tbody id="comparisonTableBody"></tbody>
+                </table>
+            </div>
+
+            <hr style="border: 0; border-top: 1px dashed var(--border); margin: 15px 0;">
+
+            <div class="card-header">📝 本周小结</div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom: 10px;">记录本周工作心得、改进点或对下周的规划。</p>
+            <textarea id="weeklySummaryInput" class="input-control" placeholder="这周工作感觉如何？有什么需要改进的？..." oninput="autoSaveWeeklySummary()" style="min-height: 80px;"></textarea>
+        </div>
+    </div>
+
+    <!-- === TAB 2: 月度复盘 === -->
+    <div id="tab-monthly" class="tab-content">
+        <div class="card">
+            <div class="week-nav">
+                <button onclick="changeMonth(-1)">◀ 上月</button>
+                <span id="currentMonthLabel">加载中...</span>
+                <button onclick="changeMonth(1)">下月 ▶</button>
+            </div>
+            <div class="stat-grid" style="margin-bottom: 15px;">
+                <div class="stat-box"><span class="stat-label">月总计划工时</span><span class="stat-value" id="monthlyPlanTotal" style="color:var(--text-main)">0h</span></div>
+                <div class="stat-box"><span class="stat-label">工时达成率</span><span class="stat-value" id="monthlyAchieveRate" style="color:var(--warning)">0%</span></div>
+            </div>
+            <div class="chart-container"><canvas id="monthlyChart"></canvas></div>
+            <p style="font-size:0.75rem; color:var(--text-muted); text-align:center; margin-top:5px;">💡 点击或触摸图表节点，可查看详细数据和达成比</p>
+        </div>
+
+        <div class="card">
+            <div class="card-header">📝 月度深度大复盘</div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom: 10px;">总结本月的心态变化、晋升准备、或者对下月排班的期望。</p>
+            <textarea id="monthlyReflectionInput" class="input-control" placeholder="本月感受如何？学到了什么新技能？..." oninput="autoSaveMonthlyReflection()"></textarea>
+        </div>
+    </div>
+
+    <!-- === TAB 3: 数据设置 === -->
+    <div id="tab-settings" class="tab-content">
+        <div class="card">
+            <div class="card-header">⏰ 自定义/补充打卡记录</div>
+            <div class="manual-entry-form">
+                <div class="input-group full-width">
+                    <label>日期</label>
+                    <input type="date" id="manualDate" class="input-control">
+                </div>
+                <div class="input-group">
+                    <label>上班时间(实际)</label>
+                    <input type="time" id="manualStart" class="input-control">
+                </div>
+                <div class="input-group">
+                    <label>下班时间(实际)</label>
+                    <input type="time" id="manualEnd" class="input-control">
+                </div>
+                <button class="btn btn-outline full-width" style="color: var(--primary); border-color: var(--primary);" onclick="addManualLog()">+ 补充打卡明细</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">⚙️ 基础设置与备份 (防丢失必用)</div>
+            <div class="input-group">
+                <label>时薪标准 (元/小时)</label>
+                <input type="number" id="hourlyRate" class="input-control" value="50" step="1" oninput="updateAll()">
+            </div>
+            <div class="stat-grid" style="margin-top: 15px;">
+                <button class="btn btn-outline" onclick="exportData()">⬇️ 导出数据防丢</button>
+                <button class="btn btn-outline" style="color:var(--danger)" onclick="importData()">⬆️ 恢复本地数据</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">✨ 智能排班导入</div>
+            <div class="input-group">
+                <textarea id="scheduleInput" class="input-control" placeholder="粘贴排班文本 (自动存为当前选定周)..."></textarea>
+            </div>
+            <button class="btn" style="background:var(--warning); width:100%; color:white;" onclick="parseSchedule()">一键智能解析排班</button>
+        </div>
+        
+        <div class="card">
+            <div class="card-header">所有打卡流水</div>
+            <div class="table-container">
+                <table>
+                    <thead><tr><th>日期</th><th>计薪时段</th><th>工时</th><th>删</th></tr></thead>
+                    <tbody id="logTable"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 底部导航 -->
+<div class="bottom-nav">
+    <div class="nav-item active" onclick="switchTab('tab-weekly', this)">📊 本周看板</div>
+    <div class="nav-item" onclick="switchTab('tab-monthly', this)">📈 月度复盘</div>
+    <div class="nav-item" onclick="switchTab('tab-settings', this)">⚙️ 数据设置</div>
+</div>
+
+<script>
+    const pad = num => String(num).padStart(2, '0');
+    const getLocalDateStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const getMonthStr = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+
+    let logs = JSON.parse(localStorage.getItem('punchLogsV10')) || [];
+    let plans = JSON.parse(localStorage.getItem('plansV10')) || {}; 
+    let reflections = JSON.parse(localStorage.getItem('reflectionsV10')) || {};
+    let ratios = JSON.parse(localStorage.getItem('ratiosV10')) || {};
+
+    let currentWeekOffset = 0;
+    let currentMonthOffset = 0;
+    let weeklyChartInst = null; let ratioChartInst = null; let monthlyChartInst = null;
+
+    function switchTab(tabId, el) {
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(c => c.classList.remove('active'));
+        document.getElementById(tabId).classList.add('active');
+        el.classList.add('active');
+        updateAll();
+    }
+
+    function roundToHalfHour(date, type) {
+        let h = date.getHours(), m = date.getMinutes();
+        if (type === 'in') { if (m > 0 && m <= 30) m = 30; else if (m > 30) { m = 0; h += 1; } } 
+        else { if (m > 0 && m < 30) m = 0; else if (m >= 30) m = 30; }
+        let newDate = new Date(date); newDate.setHours(h, m, 0, 0); return newDate;
+    }
+    
+    function updateClock() {
+        const now = new Date();
+        document.getElementById('clock').textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+        document.getElementById('date').textContent = `${now.getFullYear()}年${pad(now.getMonth() + 1)}月${pad(now.getDate())}日 周${['日','一','二','三','四','五','六'][now.getDay()]}`;
+    }
+    setInterval(updateClock, 1000); updateClock();
+
+    function punchIn() {
+        if (logs.some(log => !log.endTime)) return alert('⚠️ 当前已有未结束的上班记录！');
+        const now = new Date(), calcTime = roundToHalfHour(now, 'in'); 
+        logs.unshift({ id: Date.now(), dateStr: getLocalDateStr(now), startTime: `${pad(calcTime.getHours())}:${pad(calcTime.getMinutes())}`, startTimestamp: calcTime.getTime(), realEnd: null, endTime: null, endTimestamp: null, duration: 0 });
+        saveAndRender();
+    }
+    
+    function punchOut() {
+        const index = logs.findIndex(log => !log.endTime);
+        if (index === -1) return alert('⚠️ 没有找到进行中的打卡记录！');
+        const now = new Date(), calcTime = roundToHalfHour(now, 'out'); 
+        logs[index].endTime = `${pad(calcTime.getHours())}:${pad(calcTime.getMinutes())}`;
+        logs[index].endTimestamp = calcTime.getTime();
+        logs[index].duration = Math.max(0, (logs[index].endTimestamp - logs[index].startTimestamp) / 3600000); 
+        saveAndRender();
+    }
+
+    function addManualLog() {
+        const dateVal = document.getElementById('manualDate').value;
+        const startVal = document.getElementById('manualStart').value;
+        const endVal = document.getElementById('manualEnd').value;
+        if (!dateVal || !startVal || !endVal) return alert('请填全 日期、上班时间 和 下班时间！');
+
+        const realStartDt = new Date(`${dateVal}T${startVal}:00`);
+        let realEndDt = new Date(`${dateVal}T${endVal}:00`);
+        if (realEndDt < realStartDt) realEndDt.setDate(realEndDt.getDate() + 1);
+
+        const calcStartDt = roundToHalfHour(realStartDt, 'in');
+        const calcEndDt = roundToHalfHour(realEndDt, 'out');
+        let diffHours = (calcEndDt.getTime() - calcStartDt.getTime()) / 3600000;
+
+        logs.push({
+            id: Date.now(), dateStr: dateVal,
+            startTime: `${pad(calcStartDt.getHours())}:${pad(calcStartDt.getMinutes())}`, startTimestamp: calcStartDt.getTime(),
+            endTime: `${pad(calcEndDt.getHours())}:${pad(calcEndDt.getMinutes())}`, endTimestamp: calcEndDt.getTime(),
+            duration: diffHours > 0 ? diffHours : 0
+        });
+        logs.sort((a, b) => b.startTimestamp - a.startTimestamp); 
+        saveAndRender();
+        alert('✅ 补卡成功！已计入流水。');
+    }
+
+    function getWeekDates(offset) {
+        const now = new Date(); now.setDate(now.getDate() + (offset * 7)); 
+        const dayOfWeek = now.getDay() === 0 ? 7 : now.getDay(); 
+        let weekDates = [];
+        for (let i = 1; i <= 7; i++) {
+            let d = new Date(now); d.setDate(now.getDate() - dayOfWeek + i);
+            weekDates.push(getLocalDateStr(d));
+        }
+        return weekDates;
+    }
+
+    function changeWeek(delta) { currentWeekOffset += delta; updateAll(); }
+    
+    function addDailyReflection(dateStr) {
+        let oldText = reflections[dateStr] || '';
+        let text = prompt(`【${dateStr} 每日心得】\n记录今天的特殊客情、错误或学到的技能：`, oldText);
+        if (text !== null) {
+            reflections[dateStr] = text.trim();
+            saveAndRender();
+        }
+    }
+
+    function autoSaveWeeklySummary() {
+        const weekDates = getWeekDates(currentWeekOffset);
+        const weekKey = 'week_summary_' + weekDates[0];
+        reflections[weekKey] = document.getElementById('weeklySummaryInput').value;
+        localStorage.setItem('reflectionsV10', JSON.stringify(reflections));
+    }
+
+    function editPlan(dateStr) {
+        let current = plans[dateStr] || {};
+        let newText = prompt(`修改 ${dateStr} 排班 (如: 09:00-18:00或OFF):`, current.rawText || 'OFF');
+        if (newText === null) return;
+        let newHours = prompt(`修改 ${dateStr} 计划工时:`, current.hours || 0);
+        if (newHours === null) return;
+        plans[dateStr] = { rawText: newText, hours: parseFloat(newHours) || 0 };
+        saveAndRender();
+    }
+
+    function renderWeeklyArea() {
+        const weekDates = getWeekDates(currentWeekOffset);
+        
+        // 智能判断当前周属于哪个月的第几周 (以周四所在月份为准)
+        let thursday = new Date(weekDates[3]); 
+        let mMonth = thursday.getMonth() + 1;
+        let mDate = thursday.getDate();
+        let weekNumInMonth = Math.floor((mDate - 1) / 7) + 1;
+        let weekTextInMonth = weekNumInMonth > 4 ? '尾声' : `第${weekNumInMonth}周`;
+        
+        document.getElementById('currentWeekLabel').innerHTML = `<span style="color:var(--text-main)">${mMonth}月 ${weekTextInMonth}</span> (${weekDates[0].slice(5)}~${weekDates[6].slice(5)})`;
+        
+        let cLabels = [], cPlan = [], cActual = [];
+        const tbody = document.getElementById('comparisonTableBody'); tbody.innerHTML = '';
+        
+        let weekPlanHours = 0;
+        let weekActualHours = 0;
+
+        weekDates.forEach((dStr, i) => {
+            const plan = plans[dStr] || { rawText: '未排班', hours: 0 };
+            const actualHours = logs.filter(l => l.dateStr === dStr).reduce((sum, l) => sum + (l.duration||0), 0);
+            
+            weekPlanHours += (plan.hours || 0);
+            weekActualHours += actualHours;
+
+            cLabels.push(`周${['一','二','三','四','五','六','日'][i]}`);
+            cPlan.push(plan.hours); cActual.push(actualHours.toFixed(1));
+
+            let noteHtml = reflections[dStr] ? `<div class="badge-note">💡 ${reflections[dStr]}</div>` : '';
+            
+            tbody.innerHTML += `
+                <tr>
+                    <td>${dStr.slice(5)}<br><span style="font-size:0.7rem;color:var(--text-muted)">周${['一','二','三','四','五','六','日'][i]}</span></td>
+                    <td onclick="editPlan('${dStr}')" style="cursor:pointer; color:var(--primary); font-size:0.75rem">${plan.rawText} ✏️</td>
+                    <td><span style="color:var(--text-muted)">${plan.hours}</span> / <strong style="color:var(--success)">${actualHours.toFixed(1)}</strong></td>
+                    <td>
+                        <button class="btn-outline" style="padding:2px 6px;font-size:0.7rem;border-radius:4px" onclick="addDailyReflection('${dStr}')">写心得</button>
+                        ${noteHtml}
+                    </td>
+                </tr>`;
+        });
+
+        // 渲染 预计/实际 双轨工资
+        const rateVal = parseFloat(document.getElementById('hourlyRate').value) || 50;
+        let pSalaryStr = (weekPlanHours * rateVal).toFixed(1).replace('.0', '');
+        let aSalaryStr = (weekActualHours * rateVal).toFixed(1).replace('.0', '');
+        
+        document.getElementById('weekSalaryOverview').innerHTML = `<span style="color:var(--warning)">¥${pSalaryStr}</span> <span style="color:var(--text-muted); font-size:0.85rem">/</span> <span style="color:var(--success)">¥${aSalaryStr}</span>`;
+        document.getElementById('weekActualHours').textContent = `${weekActualHours.toFixed(1)}h`;
+        
+        const weekKey = 'week_summary_' + weekDates[0];
+        document.getElementById('weeklySummaryInput').value = reflections[weekKey] || '';
+
+        if (weeklyChartInst) weeklyChartInst.destroy();
+        weeklyChartInst = new Chart(document.getElementById('weeklyChart').getContext('2d'), {
+            type: 'bar',
+            data: { labels: cLabels, datasets: [
+                { label: '计划', data: cPlan, backgroundColor: '#94a3b8' },
+                { label: '实际', data: cActual, backgroundColor: '#10b981' }
+            ]},
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false, 
+                interaction: { mode: 'index', intersect: false },
+                scales: { y: { beginAtZero: true } } 
+            }
+        });
+
+        let ratioData = ratios[weekDates[0]] || { run: 0, watch: 0 };
+        document.getElementById('ratioRun').value = ratioData.run || '';
+        document.getElementById('ratioWatch').value = ratioData.watch || '';
+        
+        if (ratioChartInst) ratioChartInst.destroy();
+        let totalRatio = (parseFloat(ratioData.run)||0) + (parseFloat(ratioData.watch)||0);
+        ratioChartInst = new Chart(document.getElementById('ratioChart').getContext('2d'), {
+            type: 'doughnut',
+            data: { labels: ['跑菜时长', '看区时长'], datasets: [{ data: totalRatio > 0 ? [ratioData.run, ratioData.watch] : [1,1], backgroundColor: totalRatio > 0 ? ['#f59e0b', '#4f46e5'] : ['#e2e8f0', '#e2e8f0'] }] },
+            options: { responsive: true, maintainAspectRatio: false, cutout: '70%', plugins: { legend: { position: 'right' } } }
+        });
+    }
+
+    function saveRatio() {
+        const weekKey = getWeekDates(currentWeekOffset)[0];
+        ratios[weekKey] = {
+            run: parseFloat(document.getElementById('ratioRun').value) || 0,
+            watch: parseFloat(document.getElementById('ratioWatch').value) || 0
+        };
+        saveAndRender();
+        alert('✅ 岗位工时比例保存成功！');
+    }
+
+    function changeMonth(delta) { currentMonthOffset += delta; updateAll(); }
+    
+    function autoSaveMonthlyReflection() {
+        let targetMonth = getMonthObj(currentMonthOffset).str;
+        reflections[targetMonth] = document.getElementById('monthlyReflectionInput').value;
+        localStorage.setItem('reflectionsV10', JSON.stringify(reflections));
+    }
+
+    function getMonthObj(offset) {
+        let d = new Date(); d.setMonth(d.getMonth() + offset);
+        return { year: d.getFullYear(), month: d.getMonth() + 1, str: getMonthStr(d), dateObj: d };
+    }
+
+    function renderMonthlyArea() {
+        let targetMonth = getMonthObj(currentMonthOffset);
+        document.getElementById('currentMonthLabel').textContent = `${targetMonth.year}年${targetMonth.month}月`;
+        document.getElementById('monthlyReflectionInput').value = reflections[targetMonth.str] || '';
+
+        let mTotalActual = 0, mTotalPlan = 0;
+        let daysInMonth = new Date(targetMonth.year, targetMonth.month, 0).getDate();
+        let weekAgg = [0,0,0,0,0], weekPlanAgg = [0,0,0,0,0];
+
+        for(let i=1; i<=daysInMonth; i++) {
+            let dStr = `${targetMonth.str}-${pad(i)}`;
+            let aHrs = logs.filter(l => l.dateStr === dStr).reduce((s, l) => s + (l.duration||0), 0);
+            let pHrs = (plans[dStr] && plans[dStr].hours) ? plans[dStr].hours : 0;
+            mTotalActual += aHrs; mTotalPlan += pHrs;
+            let wIdx = Math.floor((i-1)/7); if(wIdx > 4) wIdx = 4;
+            weekAgg[wIdx] += aHrs; weekPlanAgg[wIdx] += pHrs;
+        }
+
+        document.getElementById('monthlyPlanTotal').textContent = mTotalPlan.toFixed(1) + 'h';
+        let rate = mTotalPlan > 0 ? ((mTotalActual / mTotalPlan) * 100).toFixed(0) : 0;
+        document.getElementById('monthlyAchieveRate').textContent = rate + '%';
+        
+        const rateVal = parseFloat(document.getElementById('hourlyRate').value) || 50;
+        document.getElementById('monthHours').textContent = mTotalActual.toFixed(1) + 'h';
+        document.getElementById('monthSalary').textContent = `¥${(mTotalActual * rateVal).toFixed(2)}`;
+
+        if (monthlyChartInst) monthlyChartInst.destroy();
+        monthlyChartInst = new Chart(document.getElementById('monthlyChart').getContext('2d'), {
+            type: 'line',
+            data: { labels: ['第1周', '第2周', '第3周', '第4周', '尾声'], datasets: [
+                { label: '实际走势', data: weekAgg, borderColor: '#10b981', tension: 0.3, fill: true, backgroundColor: 'rgba(16, 185, 129, 0.1)', pointRadius: 4, pointHoverRadius: 6 },
+                { label: '计划走势', data: weekPlanAgg, borderColor: '#94a3b8', borderDash: [5,5], tension: 0.3, pointRadius: 4, pointHoverRadius: 6 }
+            ]},
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    tooltip: {
+                        backgroundColor: 'rgba(30, 41, 59, 0.9)',
+                        titleFont: { size: 13 }, bodyFont: { size: 13 }, padding: 10,
+                        callbacks: {
+                            label: function(context) { return context.dataset.label + ': ' + Number(context.parsed.y).toFixed(1) + ' h'; },
+                            afterBody: function(context) {
+                                if (context.length >= 2) {
+                                    let act = context.find(c => c.dataset.label === '实际走势');
+                                    let pln = context.find(c => c.dataset.label === '计划走势');
+                                    if (act && pln && pln.parsed.y > 0) {
+                                        return '\n📊 阶段达成率: ' + ((act.parsed.y / pln.parsed.y) * 100).toFixed(1) + '%';
+                                    }
+                                }
+                                return '';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    function renderSettingsArea() {
+        const tbody = document.getElementById('logTable'); tbody.innerHTML = '';
+        logs.slice(0, 30).forEach(log => {
+            tbody.innerHTML += `<tr><td>${log.dateStr.slice(5)}</td><td>${log.startTime}-${log.endTime||'中'}</td><td>${(log.duration||0).toFixed(1)}h</td>
+                <td><span style="color:var(--danger);font-size:1.2rem;cursor:pointer" onclick="deleteLog(${log.id})">×</span></td></tr>`;
+        });
+    }
+
+    function parseSchedule() {
+        const text = document.getElementById('scheduleInput').value;
+        if (!text.trim()) return alert("请粘贴文本");
+        let chunks = text.split(/(?=星期[一二三四五六日天]|周[一二三四五六日天])/);
+        if (chunks.length <= 1) chunks = text.split(/\n+/).filter(l => l.trim().length > 0);
+        else chunks = chunks.filter(c => c.trim().length > 3);
+
+        let parsedCount = 0; const currentWeekDates = getWeekDates(currentWeekOffset);
+        for (let i = 0; i < chunks.length; i++) {
+            let part = chunks[i], isOff = /OFF|休息/i.test(part), times = part.match(/\d{1,2}:\d{2}/g) || [];
+            if (!isOff && times.length === 0) continue;
+            let hours = 0, hoursMatch = part.match(/(\d+(\.\d+)?)\s*[hH小时]/) || part.match(/[0oO]\s*[hH小时]/i);
+            if (hoursMatch) hours = parseFloat(hoursMatch[1]) || 0;
+            let rawText = 'OFF';
+            if (!isOff && times.length > 0) rawText = times.length >= 4 ? `${times[0]}-${times[1]}/${times[2]}-${times[3]}` : (times.length===2 ? `${times[0]}-${times[1]}` : times.join("-"));
+            if (parsedCount < 7) { plans[currentWeekDates[parsedCount]] = { rawText, hours }; parsedCount++; }
+        }
+        if (parsedCount === 0) return alert("未识别到内容");
+        document.getElementById('scheduleInput').value = ''; saveAndRender();
+        alert(`✨ 成功导入 ${parsedCount} 天排班！`);
+    }
+
+    function exportData() {
+        const json = JSON.stringify({ logs, plans, reflections, ratios });
+        prompt("【复制下方长文本保存】", json);
+    }
+    
+    function importData() {
+        const str = prompt("粘贴备份的文本：");
+        if (!str) return;
+        try {
+            const data = JSON.parse(str);
+            if (data.logs) logs = data.logs;
+            if (data.plans) plans = data.plans;
+            if (data.reflections) reflections = data.reflections;
+            if (data.ratios) ratios = data.ratios;
+            saveAndRender();
+            alert("✅ 恢复成功！");
+        } catch(e) { alert("❌ 恢复失败。"); }
+    }
+
+    function deleteLog(id) { if (confirm('删除记录？')) { logs = logs.filter(l => l.id !== id); saveAndRender(); } }
+    
+    function saveAndRender() {
+        localStorage.setItem('punchLogsV10', JSON.stringify(logs));
+        localStorage.setItem('plansV10', JSON.stringify(plans));
+        localStorage.setItem('reflectionsV10', JSON.stringify(reflections));
+        localStorage.setItem('ratiosV10', JSON.stringify(ratios));
+        updateAll();
+    }
+    
+    function updateAll() {
+        renderWeeklyArea();
+        renderMonthlyArea();
+        renderSettingsArea();
+    }
+
+    document.getElementById('hourlyRate').value = localStorage.getItem('hourlyRateV10') || 50;
+    document.getElementById('hourlyRate').addEventListener('change', function() { localStorage.setItem('hourlyRateV10', this.value); updateAll(); });
+    document.getElementById('manualDate').value = getLocalDateStr(new Date());
+    
+    updateAll();
+</script>
+
+</body>
+</html>
